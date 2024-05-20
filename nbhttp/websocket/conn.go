@@ -330,6 +330,11 @@ func (c *Conn) nextFrame(data []byte) ([]byte, MessageType, []byte, bool, bool, 
 // Read .
 func (c *Conn) Parse(data []byte) error {
 	c.mux.Lock()
+	if c.closed {
+		c.mux.Unlock()
+		return net.ErrClosed
+	}
+
 	readLimit := c.Engine.ReadLimit
 	if readLimit > 0 && (len(c.bytesCached)+len(data) > readLimit) {
 		c.mux.Unlock()
@@ -352,10 +357,27 @@ func (c *Conn) Parse(data []byte) error {
 	var protocolMessage []byte
 	var opcode MessageType
 	var ok, fin, compress bool
+
+	releaseBuf := func() {
+		if len(frame) > 0 {
+			allocator.Free(frame)
+		}
+		if len(message) > 0 {
+			allocator.Free(message)
+		}
+		if len(protocolMessage) > 0 {
+			allocator.Free(protocolMessage)
+		}
+	}
+
 	for !c.closed {
 		func() {
 			c.mux.Lock()
 			defer c.mux.Unlock()
+			if c.closed {
+				err = net.ErrClosed
+				return
+			}
 			data, opcode, body, ok, fin, compress, err = c.nextFrame(data)
 			if err != nil {
 				return
@@ -408,6 +430,7 @@ func (c *Conn) Parse(data []byte) error {
 		}()
 
 		if err != nil {
+			releaseBuf()
 			if errors.Is(err, ErrMessageTooLarge) || errors.Is(err, ErrControlMessageTooBig) {
 				c.WriteClose(1009, err.Error())
 			}
@@ -419,6 +442,7 @@ func (c *Conn) Parse(data []byte) error {
 			case FragmentMessage, TextMessage, BinaryMessage:
 				if c.dataFrameHandler != nil {
 					c.handleDataFrame(c.msgType, fin, frame)
+					frame = nil
 				}
 				if fin {
 					if c.messageHandler != nil {
@@ -435,21 +459,24 @@ func (c *Conn) Parse(data []byte) error {
 							message = b
 							rc.Close()
 							if err != nil {
+								releaseBuf()
 								return err
 							}
 						}
 						c.handleMessage(c.msgType, message)
+						message = nil
 					}
 					c.compress = false
 					c.expectingFragments = false
-					message = nil
 					c.msgType = 0
 				} else {
 					c.expectingFragments = true
 				}
 			case PingMessage, PongMessage, CloseMessage:
 				c.handleProtocolMessage(opcode, protocolMessage)
+				protocolMessage = nil
 			default:
+				releaseBuf()
 				return ErrInvalidFragmentMessage
 			}
 		} else {
@@ -462,8 +489,12 @@ func (c *Conn) Parse(data []byte) error {
 	}
 
 Exit:
+	releaseBuf()
 	c.mux.Lock()
 	defer c.mux.Unlock()
+	if c.closed {
+		return net.ErrClosed
+	}
 	// The data bytes were not all consumed, need to recache the current bytes left:
 	if len(data) > 0 {
 		// The data bytes were appended to the tail of the previous chaced data:
