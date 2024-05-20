@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
@@ -66,7 +67,7 @@ type commonFields struct {
 	pongMessageHandler  func(c *Conn, appData string)
 	closeMessageHandler func(c *Conn, code int, text string)
 
-	openHandler      func(*Conn)
+	openHandler      func(context.Context, *Conn)
 	messageHandler   func(c *Conn, messageType MessageType, data []byte)
 	dataFrameHandler func(c *Conn, messageType MessageType, fin bool, data []byte)
 }
@@ -218,7 +219,7 @@ func (u *Upgrader) SetPongHandler(h func(*Conn, string)) {
 }
 
 // OnOpen .
-func (u *Upgrader) OnOpen(h func(*Conn)) {
+func (u *Upgrader) OnOpen(h func(context.Context, *Conn)) {
 	u.openHandler = h
 }
 
@@ -500,7 +501,7 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 
 	if wsc.openHandler != nil {
-		wsc.openHandler(wsc)
+		wsc.openHandler(r.Context(), wsc)
 	}
 
 	// if parser != nil {

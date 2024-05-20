@@ -254,7 +254,7 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		nbc.SetSession(wsConn)
 
 		if wsConn.openHandler != nil {
-			wsConn.openHandler(wsConn)
+			wsConn.openHandler(ctx, wsConn)
 		}
 
 		notifyResult(err)
